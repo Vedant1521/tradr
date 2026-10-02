@@ -1,0 +1,42 @@
+name: CI - Backend & Core Pipeline
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'apps/Backend/**'
+      - 'apps/Price_Poller/**'
+      - 'apps/Websocket/**'
+      - 'packages/**'
+      - 'package.json'
+      - 'bun.lock'
+      - '.github/workflows/ci-backend.yml'
+  pull_request:
+    branches: [ main, master ]
+    paths:
+      - 'apps/Backend/**'
+      - 'apps/Price_Poller/**'
+      - 'apps/Websocket/**'
+      - 'packages/**'
+      - 'package.json'
+      - 'bun.lock'
+      - '.github/workflows/ci-backend.yml'
+
+jobs:
+  test:
+    name: Backend & Streaming Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun Environment
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install Dependencies
+        run: bun install
+
+      - name: Run Core Test Suite
+        run: bun test apps/ packages/

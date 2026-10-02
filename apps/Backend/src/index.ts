@@ -1,0 +1,142 @@
+import express from "express";
+import type { Express, Request, Response } from "express";
+import cors from "cors";
+import { userRouter } from "./routes/user";
+import { tradeRoutes } from "./routes/trades";
+import { assetRouter } from "./routes/asset";
+import { oauthRouter } from "./routes/oauth";
+import { initOrderBroadcast, stopOrderBroadcast } from "./services/orderBroadcast";
+import { initPriceMonitor, stopPriceMonitor } from "./services/priceMonitor";
+import { startPositionMonitor, stopPositionMonitor } from "./services/positionMonitor";
+import { startSnapshotService, stopSnapshotService } from "./services/snapshotService";
+import { restoreState } from "./services/stateRestoration";
+import { initPlatformProfit } from "./services/platformProfit";
+import { logOAuthStatus } from "./config/oauth";
+
+const app: Express = express();
+const port = Number(process.env.PORT) || 5000;
+
+const allowedOrigins = Bun.env.CORS_ORIGINS?.split(",") || [
+  "http://localhost:3000",
+  "http://localhost:5173",
+  "http://localhost:5174",
+  "http://localhost:5175",
+  "http://localhost:5176",
+  "http://localhost:5177",
+  "http://localhost:5178",
+  "http://localhost:5179",
+];
+
+// Apply CORS middleware with explicit origin function
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Allow requests with no origin (like mobile apps, curl, postman)
+      if (!origin) return callback(null, true);
+
+      if (allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error(`Origin ${origin} not allowed by CORS`));
+      }
+    },
+    credentials: true,
+  }),
+);
+
+app.use(express.json());
+import { globalRateLimit } from "./middleware/rateLimit";
+// Health and Readiness probes
+app.get("/health", (req: Request, res: Response) => {
+  res.status(200).json({
+    status: "ok",
+    service: "tradr-backend",
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.get("/ready", async (req: Request, res: Response) => {
+  try {
+    const { prisma } = await import("database");
+    await prisma.$queryRaw`SELECT 1`;
+    const { PriceStorageMp } = await import("./data/store");
+    const btcPrice = PriceStorageMp.get("BTC");
+    const pricesLive = (btcPrice?.bid ?? 0) > 0 || (btcPrice?.ask ?? 0) > 0;
+    res.status(200).json({
+      status: "ready",
+      database: "connected",
+      priceFeed: pricesLive ? "live" : "waiting",
+    });
+  } catch (error) {
+    res.status(503).json({
+      status: "not_ready",
+      error: error instanceof Error ? error.message : "Service dependencies unavailable",
+    });
+  }
+});
+
+app.use("/api/v2/user", userRouter);
+app.use("/api/v2/trade", tradeRoutes);
+app.use("/api/v2/asset", assetRouter);
+app.use("/api/v2/auth", oauthRouter);
+
+//catch all undefined routes
+app.use((req: Request, res: Response) => {
+  res.status(404).json({ error: "Route Not Found !! Undefined Route" });
+});
+
+// Main async function to initialize services and start server
+async function main() {
+  try {
+    logOAuthStatus();
+
+    //  Restore state from database (critical for crash recovery)
+    await restoreState();
+
+    //  Initialize platform profit cache (AFTER restoreState so open orders are loaded)
+    await initPlatformProfit();
+
+    //  Initialize other services
+    await initPriceMonitor();
+    startPositionMonitor();
+    await initOrderBroadcast();
+
+    // Start snapshot service (saves state every 10 seconds)
+    startSnapshotService();
+
+    // Start Express server
+    app.listen(port, () => {
+      console.log(`
+    Server running on port ${port}
+    User API: http://localhost:${port}/api/v2/user
+    Trade API: http://localhost:${port}/api/v2/trade
+    Asset API: http://localhost:${port}/api/v2/asset`);
+    });
+  } catch (error) {
+    console.error("[SERVER] Failed to start server:", error);
+    process.exit(1);
+  }
+}
+
+// Graceful shutdown handler
+async function shutdown() {
+  console.log("\n[SERVER] Shutting down gracefully...");
+  try {
+    stopSnapshotService();
+    stopPositionMonitor();
+    await stopPriceMonitor();
+    await stopOrderBroadcast();
+    console.log("[SERVER] All services stopped successfully");
+  } catch (error) {
+    console.error("[SERVER] Error during shutdown:", error);
+  }
+  process.exit(0);
+}
+
+// Register shutdown handlers
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
+
+// Start the application
+main();
