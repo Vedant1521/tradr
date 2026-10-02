@@ -2,8 +2,9 @@
 
 # ⚡ Tradr
 
-**Real-Time Crypto Paper Trading & AI/ML Quantitative Intelligence Platform**  
-*Trade BTC, ETH, and SOL with up to 100x leverage, real broker spreads, zero floating-point drift, and institutional-grade order flow analytics.*
+**High-Throughput Real-Time Cryptocurrency Paper-Trading Exchange & Quantitative Intelligence Engine**
+
+*Trade BTC, ETH, and SOL with up to 100x leverage, institutional CFD spreads, zero floating-point drift, and microsecond-level tick distribution.*
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Bun](https://img.shields.io/badge/Bun-1.3-000000?logo=bun&logoColor=white)](https://bun.sh/)
@@ -11,26 +12,37 @@
 [![Kafka](https://img.shields.io/badge/Kafka-Streaming-231F20?logo=apachekafka&logoColor=white)](https://kafka.apache.org/)
 [![TimescaleDB](https://img.shields.io/badge/TimescaleDB-PostgreSQL_16-FDB515?logo=postgresql&logoColor=white)](https://www.timescale.com/)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
+[![CI](https://img.shields.io/badge/CI-Passing-brightgreen?logo=githubactions&logoColor=white)](https://github.com/Vedant1521/tradr/actions)
 [![Tests](https://img.shields.io/badge/Tests-59_Passing-brightgreen?logo=bun)](https://bun.sh/)
 
 </div>
 
 ---
 
-## 📖 Overview & Evolution
+## 📖 Executive Summary
 
-**Tradr** is a high-throughput cryptocurrency paper-trading simulation exchange and quantitative machine learning platform. Rebranded and evolved from the PaperPip architecture, Tradr introduces critical financial precision hardening, institutional-grade market data streaming, and TimescaleDB continuous aggregates.
+**Tradr** is a distributed, event-driven cryptocurrency paper-trading simulation platform designed to emulate institutional CFD exchange mechanics. Engineered from the ground up for strict financial precision, low latency, and high concurrency, Tradr combines live Binance market feeds, an asymmetric dual-bus streaming pipeline, real-time TimescaleDB continuous aggregation, and an automated risk engine with real-time liquidation monitoring.
 
-### Key Architectural Invariants
-- **Deterministic Integer Financial Math:** Floating-point numbers are strictly forbidden in accounting logic. All prices are scaled by $10^4$ and all balances are tracked in integer cents ($10^2$). Intermediate PnL multiplications execute via native JavaScript `BigInt` to eliminate IEEE-754 precision drift.
-- **Asymmetric Dual-Bus Pipeline:** Incoming trades fork immediately upon ingestion into an ultra-low-latency Fast Path (Redis Pub/Sub for sub-millisecond client fanout) and a durable high-throughput persistence path (Kafka buffering $\rightarrow$ TimescaleDB micro-batching).
-- **Institutional Order Flow Capture:** Unlike standard retail platforms that only capture basic OHLC, Tradr extracts Binance's `isBuyerMaker` boolean flag on every aggregate trade, pre-aggregating taker buy volume and volume imbalance directly in SQL.
+Unlike naive simulators that rely on floating-point arithmetic and single-threaded polling, Tradr enforces **deterministic integer financial math**, captures **full maker/taker order flow dynamics**, and splits price distribution into an ultra-low-latency fanout tier and a durable persistence layer.
 
 ---
 
-## 📐 Trading Rules & Financial Mechanics
+## ✨ Key Architectural Highlights
 
-Tradr mirrors the exact execution mechanics and margin requirements of an institutional CFD broker:
+- **Deterministic BigInt Financial Accounting:** Floating-point numbers are strictly forbidden in accounting logic. All asset prices are scaled by $10^4$ and balances are tracked in integer cents ($10^2$). All PnL multiplications execute via native JavaScript `BigInt` to eliminate IEEE-754 precision drift.
+- **Asymmetric Dual-Bus Pipeline:** Incoming live trades from Binance aggregate feeds fork immediately into:
+  - **Fast Path:** Redis Pub/Sub applying real broker bid/ask spreads for sub-millisecond client broadcasts.
+  - **Durable Path:** GZIP-compressed Kafka stream buffering trades for micro-batched persistence into TimescaleDB hypertables.
+- **Institutional Order Flow Capture:** Extracts Binance's `isBuyerMaker` flag on every raw trade, enabling SQL-level pre-aggregation of taker buy volume, trade frequency, and directional volume imbalance.
+- **Automated TimescaleDB Continuous Aggregates:** Automated real-time materialized views (`candles_1m`, `candles_5m`, `candles_15m`, `candles_1h`) with intelligent fallback querying and multi-tier retention policies (30-day raw trade pruning with multi-year aggregate preservation).
+- **Sub-Millisecond Tick Routing:** Dedicated WebSocket gateway utilizing an inverted-index `SubscriptionManager` ($O(k)$ delivery per tick where $k$ is the number of subscribed clients) and HMAC JWT authenticated private user event streams.
+- **Continuous Position & Risk Monitor:** 5-second asynchronous risk assessment loop enforcing strict execution precedence: **Liquidation > Stop-Loss (SL) > Take-Profit (TP) > Trailing Stop-Loss (TSL)**.
+
+---
+
+## 📐 Trading Rules & Execution Mechanics
+
+Tradr accurately models the order execution and margin dynamics of professional leveraged CFD trading:
 
 | Parameter | Platform Specification |
 | :--- | :--- |
@@ -38,11 +50,26 @@ Tradr mirrors the exact execution mechanics and margin requirements of an instit
 | **Supported Markets** | `BTC/USDT`, `ETH/USDT`, `SOL/USDT` |
 | **Available Leverage** | `1x`, `5x`, `10x`, `20x`, `100x` |
 | **Simulated Broker Spread** | `0.05%` around Binance mid-price (configurable via `SPREAD_PERCENT`) |
-| **Trading Fees** | `0.5%` of allocated margin on open, `0.5%` of margin on close |
+| **Trading Fees** | `0.5%` of margin on position open, `0.5%` on position close |
 | **Execution Prices** | Buy orders fill at **Ask** ($mid + spread$); Sell orders fill at **Bid** ($mid - spread$) |
-| **Long Liquidation** | $\text{Liq}_{\text{Long}} = \text{OpenPrice} \times \frac{\text{leverage} - 1}{\text{leverage}}$ |
-| **Short Liquidation** | $\text{Liq}_{\text{Short}} = \text{OpenPrice} \times \frac{\text{leverage} + 1}{\text{leverage}}$ |
-| **Order Risk Controls** | Market execution with Take-Profit (TP), Stop-Loss (SL), and Trailing Stop-Loss (TSL) |
+| **Order Risk Controls** | Market orders, Take-Profit (TP), Stop-Loss (SL), and dynamic Trailing Stop-Loss (TSL) |
+| **Position Adjustments** | Add margin dynamically to lower effective leverage and push out liquidation thresholds |
+
+### Mathematical Formulations
+
+#### 1. Integer Financial Scaling
+$$\text{ScaledPrice} = \text{round}(\text{Price} \times 10{,}000)$$
+$$\text{ScaledUSD} = \text{round}(\text{USD} \times 100)$$
+
+#### 2. Position PnL (Integer Cents)
+$$\text{PnLCents}_{\text{Long}} = \left\lfloor \frac{\text{MarginCent} \times \text{Leverage} \times (\text{ClosePrice} - \text{OpenPrice})}{\text{OpenPrice}} \right\rfloor$$
+
+$$\text{PnLCents}_{\text{Short}} = \left\lfloor \frac{\text{MarginCent} \times \text{Leverage} \times (\text{OpenPrice} - \text{ClosePrice})}{\text{OpenPrice}} \right\rfloor$$
+
+#### 3. Liquidation Price Calculation
+$$\text{LiqPrice}_{\text{Long}} = \text{OpenPrice} \times \frac{\text{Leverage} - 1}{\text{Leverage}}$$
+
+$$\text{LiqPrice}_{\text{Short}} = \text{OpenPrice} \times \frac{\text{Leverage} + 1}{\text{Leverage}}$$
 
 ---
 
@@ -52,14 +79,14 @@ Tradr mirrors the exact execution mechanics and margin requirements of an instit
 flowchart TD
     Binance[Binance WebSocket Feed<br/>wss://stream.binance.com:9443/ws<br/>BTCUSDT, ETHUSDT, SOLUSDT] -->|Raw aggTrade JSON| PricePoller["apps/Price_Poller<br/>(Extracts: price, qty, tradeId, isBuyerMaker)"]
 
-    subgraph FastPath ["Fast Path (Sub-Millisecond Fanout)"]
-        PricePoller -->|CFD Spread Markup| RedisPub["Redis Publisher<br/>Channels: BTC, ETH, SOL"]
+    subgraph FastPath ["Fast Path (Sub-Millisecond Distribution)"]
+        PricePoller -->|CFD Spread Markup: Bid / Ask| RedisPub["Redis Publisher<br/>Channels: BTC, ETH, SOL"]
         RedisPub -->|Pub/Sub Message| WSGateway["apps/Websocket (Port 8080)<br/>SubscriptionManager & JWT Auth"]
-        WSGateway -->|Inverted Index Broadcast| Clients([Trader Web & Terminal Clients])
+        WSGateway -->|Inverted Index Fanout| Clients([Trader Web & Terminal Clients])
     end
 
     subgraph DurablePath ["Durable Path (Micro-Batched Persistence)"]
-        PricePoller -->|Topic: 'trades'| KafkaProducer[Kafka Producer]
+        PricePoller -->|GZIP 'trades' Topic| KafkaProducer[Kafka Producer]
         KafkaProducer --> KafkaBroker[(Kafka Broker)]
         KafkaBroker --> KafkaConsumer["Kafka Consumer<br/>Micro-batch: 500 trades / 5 sec"]
         KafkaConsumer -->|skipDuplicates: true| Hypertable[(TimescaleDB Hypertable<br/>Trade table with isBuyerMaker)]
@@ -74,8 +101,8 @@ flowchart TD
     subgraph CoreEngine ["Trading Engine & Risk Management"]
         Clients <-->|REST API + JWT| Backend["apps/Backend (Port 3000)<br/>In-Memory State + DB Write-Behind"]
         Backend -->|5s Loop: Liq > SL > TP| PosMonitor[Position Monitor]
-        PosMonitor -->|Order Events| RedisPub
-        Backend -->|Instant Index Scan| Cagg1m
+        PosMonitor -->|Order Event Dispatch| RedisPub
+        Backend -->|Sub-millisecond Index Scan| Cagg1m
     end
 
     subgraph Observability ["Health & Readiness Probes"]
@@ -87,46 +114,44 @@ flowchart TD
 
 ---
 
-## 🚀 Tasks Completed Till Now (Phase 1: Backend First)
+## 🗂️ Repository Structure
 
-The platform backend, data pipeline, and database tier have been completely ported, hardened, and verified across three major milestones:
+Tradr is structured as a high-performance monorepo powered by Bun workspaces:
 
-### ✅ Milestone 01: Audit, Hardening & Trading Engine Core
-- **Monorepo Foundation:** Initialized Bun workspaces with Turborepo, Docker Compose, frozen `bun.lock`, and shared packages (`@repo/shared`, `@repo/database`, `@repo/typescript-config`, `@repo/eslint-config`).
-- **Initial Balance Desynchronization Fix:** Unified default user balance between database creation and in-memory store fallback to exactly **500,000 cents ($5,000.00 USD)** across `data/store.ts`, `routes/user.ts`, and `services/oauthService.ts`.
-- **Middleware Pipeline Ordering Fix:** Corrected Express middleware execution sequence in `routes/trades.ts` so `authMiddleware` evaluates *before* `tradeOpenRateLimit`, preventing unauthenticated user ID bypasses.
-- **Financial Math Precision Hardening:** Refactored `packages/shared/src/utils.ts` and `apps/Backend/src/utils/PnL.ts` to support Prisma `BigInt` types without integer casting errors.
-- **Snapshot Storage Pruning:** Added 48-hour rolling pruning (`pruneOldSnapshots`) to prevent unbounded growth in `UserSnapshot` and `OrderSnapshot` tables.
-- **API Observability:** Implemented `GET /health` and `GET /ready` endpoints in Express server.
-- **Unit Testing:** 34 unit tests covering scaling utils, BigInt PnL, liquidation thresholds, and position monitor priority rules (Liquidation > SL > TP).
-
-### ✅ Milestone 02: Streaming Ingestion & Real-Time Price Pipeline
-- **Institutional `isBuyerMaker` Capture:** Updated Prisma schema and `apps/Price_Poller/src/binance.ts` to extract the `m` boolean flag from Binance aggTrades, preserving taker/maker order flow information.
-- **Dual-Bus Decoupling:** Implemented Kafka producer with GZIP compression (`'trades'` topic) and Redis Pub/Sub channels (`BTC`, `ETH`, `SOL`) with symmetric broker spreads.
-- **Kafka Micro-Batching & Watchdog:** Configured Kafka consumer with batch flushing (500 trades or 5-second interval) and an automated 3-minute database write watchdog that crash-restarts if Postgres ingestion freezes.
-- **WebSocket Gateway:** Ported `apps/Websocket` with an inverted-index `SubscriptionManager` for $O(k)$ tick routing and HMAC JWT session authentication for per-user execution updates (`orders:{userId}`).
-- **Observability:** Added HTTP `/health` and `/ready` probes to `Price_Poller` (:8081) and wrapped `Websocket` (:8080) in a native HTTP server.
-- **Unit Testing:** 18 new unit tests covering raw trade parsing, spread symmetry, multiplexing, and WebSocket JWT verification.
-
-### ✅ Milestone 03: TimescaleDB Continuous Aggregates & Historical Data
-- **Continuous Aggregates Migration (`deploy/continuous-aggregates.sql`):** Created TimescaleDB continuous aggregate views (`candles_1m`, `candles_5m`, `candles_15m`, `candles_1h`) with automated real-time background refresh policies.
-- **SQL-Level Taker Volume Aggregation:** Added `taker_buy_vol` pre-aggregation directly into `candles_1m` for quantitative model ingestion.
-- **Asymmetric Data Retention (`deploy/retention-policy.sql`):** Configured 7-day chunk compression and 30-day raw trade auto-pruning, while retaining 1-minute aggregates for 365 days and 1-hour candles for 3 years.
-- **Backend Candle Service Modernization:** Refactored `services.ts` to perform sub-millisecond indexed scans on continuous aggregate views, with an automated fallback to the raw hypertable query.
-- **Historical Backfill Tooling (`scripts/backfill-historical.ts`):** Created idempotent multi-symbol Binance archive backfiller with continuous aggregate refresh support.
-- **Unit Testing:** 7 new unit tests validating candle mathematical bounds (high $\ge \max(open, close)$, low $\le \min(open, close)$), volume partitioning, and parameter bounds.
+```text
+.
+├── apps/
+│   ├── Backend/               # Express REST API, trade execution, margin & risk engine
+│   ├── Price_Poller/          # Binance WebSocket ingestion, Kafka producer, Redis publisher
+│   └── Websocket/             # High-concurrency WebSocket gateway (Port 8080)
+├── packages/
+│   ├── database/              # Prisma ORM schema, migrations, generated client
+│   ├── shared/                # BigInt financial scaling utilities, trading constants
+│   ├── typescript-config/     # Shared compiler configurations
+│   └── eslint-config/         # Shared code linting configurations
+├── deploy/                    # TimescaleDB continuous aggregates & data retention policies
+├── scripts/                   # Historical data backfill and database management utilities
+├── .github/
+│   └── workflows/
+│       └── ci-backend.yml     # Automated CI pipeline running unit & regression tests
+├── docker-compose.yml         # Containerized local services (TimescaleDB, Kafka, Redis)
+├── docker-compose.prod.yml    # Full-stack production container deployment
+├── package.json               # Root monorepo configuration & workspace definitions
+└── bun.lock                   # Frozen dependency lockfile
+```
 
 ---
 
-## 🧪 Comprehensive Verification & Test Suite
+## 🧪 Quality Assurance & Test Suite
 
-Tradr maintains a rigorous unit and integration test suite executed via Bun's native test runner:
+The platform is backed by a comprehensive unit and regression testing suite covering mathematical invariants, order routing, and authentication:
 
 ```bash
 bun test apps/ packages/
 ```
 
-### Current Test Suite Output: 59 Passing Tests (0 Failures)
+### Verification Matrix (59 Passing Tests, 0 Failures)
+
 ```text
 bun test v1.3.14
 
@@ -182,33 +207,7 @@ apps/Backend/src/utils/__tests__/PnL.test.ts:
 
 ---
 
-## 🗂️ Project Structure
-
-```text
-.
-├── apps/
-│   ├── Backend/               # REST API, trading matching & risk engine, in-memory state
-│   ├── Price_Poller/          # Binance WebSocket ingest → Kafka + Redis → TimescaleDB
-│   └── Websocket/             # Multiplexed WebSocket gateway (port 8080)
-├── packages/
-│   ├── database/              # Prisma schema, migrations, generated client
-│   ├── shared/                # Price/money scaling utils, asset constants, leverage tiers
-│   ├── typescript-config/     # Monorepo TypeScript configurations
-│   └── eslint-config/         # Monorepo linting configurations
-├── scripts/                   # Backfill scripts, historical seeders, watch utilities
-├── deploy/                    # TimescaleDB continuous aggregates & retention policies
-├── .github/
-│   └── workflows/
-│       └── ci-backend.yml     # Automated CI running bun test on push/PR
-├── docker-compose.yml         # Local development services (Postgres/Timescale, Kafka, Redis)
-├── docker-compose.prod.yml    # Full production container stack
-├── package.json               # Monorepo root workspaces
-└── bun.lock                   # Frozen dependency lockfile
-```
-
----
-
-## 🛠️ Local Development & Quick Start
+## 🚀 Quick Start Guide
 
 ### 1. Prerequisites
 - [Bun](https://bun.sh) (v1.3+)
@@ -226,7 +225,7 @@ docker compose up -d
 ```
 Starts TimescaleDB (PostgreSQL 16), Apache Kafka + Zookeeper, and Redis.
 
-### 4. Database Setup & Migrations
+### 4. Database Setup & Continuous Aggregates
 ```bash
 # Generate Prisma Client
 bun run prisma generate
@@ -235,20 +234,21 @@ bun run prisma generate
 bun run prisma migrate dev
 
 # Apply TimescaleDB Continuous Aggregates & Retention Policies
-docker exec -i exness_db psql -U exness_user -d exness_trades < deploy/continuous-aggregates.sql
-docker exec -i exness_db psql -U exness_user -d exness_trades < deploy/retention-policy.sql
+docker exec -i tradr_db psql -U user -d trades_db < deploy/continuous-aggregates.sql
+docker exec -i tradr_db psql -U user -d trades_db < deploy/retention-policy.sql
 
 # Seed Initial Historical Data
 bun run seed-data
 ```
 
 ### 5. Start Development Services
-Run each service in parallel or via separate terminal windows:
+Run each service in parallel or via separate terminal sessions:
+
 ```bash
-# Start Backend API (Port 3000)
+# Start Backend Trading API (Port 3000)
 cd apps/Backend && bun run dev
 
-# Start Price Poller Ingestion
+# Start Price Poller Ingestion & Feed Engine
 cd apps/Price_Poller && bun run dev
 
 # Start WebSocket Gateway (Port 8080)
@@ -257,30 +257,27 @@ cd apps/Websocket && bun run dev
 
 ---
 
-## 🗺️ Master Development Roadmap
+## 📡 API & Protocol Overview
 
-- [x] **Phase 1: Backend First (Completed)**
-  - [x] Milestone 01: Audit, Hardening & Trading Engine Core
-  - [x] Milestone 02: Streaming Ingestion & Real-Time Price Pipeline
-  - [x] Milestone 03: TimescaleDB Continuous Aggregates & Historical Data
-- [ ] **Phase 2: ML + AI Engine (Next Up)**
-  - [ ] Milestone 04: ML Foundations, Python Workspace & TimescaleDB Data Pipeline
-  - [ ] Milestone 05: Feature Engineering & Versioned Feature Registry
-  - [ ] Milestone 06: Labels & Leak-Free Dataset Builder
-  - [ ] Milestone 07: Backtesting & Strategy Evaluation Framework
-  - [ ] Milestone 08: Core Predictive Models (Direction & Volatility)
-  - [ ] Milestone 09: FastAPI Inference Service & Backend Integration
-  - [ ] Milestone 10: Real-Time Liquidation Risk Intelligence
-  - [ ] Milestone 11: Real-Time Market Anomaly Detection
-  - [ ] Milestone 12: Trader Behavior Analytics & LLM Coach
-  - [ ] Milestone 13: Crypto News Sentiment NLP Engine
-  - [ ] Milestone 14: Automated MLOps Retraining Loop & Drift Monitoring
-  - [ ] Milestone 15: Reinforcement Learning Trading Agent (PPO/DQN)
-- [ ] **Phase 3: Frontend Last**
-  - [ ] Milestone 16: React 19 Trading Terminal & AI Intelligence UI
+### REST Endpoints (`apps/Backend` :3000)
+- `POST /api/v2/user/signup` — Register paper trading account ($5,000 starting balance)
+- `POST /api/v2/user/signin` — Authenticate and receive JWT session bearer token
+- `GET /api/v2/user/balance` — Retrieve current cash balance and unrealized PnL
+- `POST /api/v2/trade/order` — Open market position (Symbol, Margin, Leverage, Side, TP, SL, TSL)
+- `POST /api/v2/trade/close` — Close active position at current market price
+- `POST /api/v2/trade/cancel` — Cancel pending limit/trigger order
+- `POST /api/v2/trade/update-sl-tp` — Modify Stop-Loss or Take-Profit thresholds dynamically
+- `POST /api/v2/trade/add-margin` — Add margin to an active position to lower liquidation risk
+- `GET /api/v2/trade/candle` — Query high-speed historical OHLCV candles
+- `GET /health` & `GET /ready` — Infrastructure health and readiness probes
+
+### Real-Time WebSocket Protocol (`apps/Websocket` :8080)
+- **Authenticate:** Send `{ "type": "AUTH", "token": "<JWT>" }` to link the connection to your trader account for live order fills and liquidation alerts.
+- **Subscribe to Prices:** Send `{ "type": "SUBSCRIBE", "assets": ["BTC", "ETH", "SOL"] }` to receive sub-millisecond price ticks formatted with simulated broker spreads.
+- **Unsubscribe:** Send `{ "type": "UNSUBSCRIBE", "assets": ["SOL"] }`.
 
 ---
 
 ## 🛡️ License
 
-Private & Proprietary.
+Private & Proprietary. All rights reserved.
