@@ -1,31 +1,17 @@
-import { prisma } from "database";
+import { prisma, type User as DbUser, type ActiveOrder as DbActiveOrder } from "database";
 import { StoreData, orderStorageMap, emailToUserId } from "../data/store";
-import type { Asset } from "shared";
+import type { Asset, Leverage } from "shared";
+import type { Order, OrderType } from "../types";
 
-export async function restoreState() {
+export async function restoreState(): Promise<void> {
   try {
     console.log("[RESTORE] Starting state restoration from database...");
     const startTime = Date.now();
 
-    // CRITICAL FIX: Delete old ActiveOrder records that are missing initialMargin field
-    // These are from before the field was added and will cause errors
-    try {
-      const deleteResult = await prisma.activeOrder.deleteMany({
-        where: {
-          initialMargin: undefined,
-        },
-      });
-      if (deleteResult.count > 0) {
-        console.log(`[RESTORE] Cleaned up ${deleteResult.count} old orders missing initialMargin field`);
-      }
-    } catch (cleanupError) {
-      console.warn("[RESTORE] Could not clean up old orders, continuing anyway:", cleanupError);
-    }
-
     // 1. Load all users from users table
-    const users = await prisma.user.findMany();
+    const users: DbUser[] = await prisma.user.findMany();
 
-    users.forEach((user) => {
+    users.forEach((user: DbUser) => {
       StoreData.set(user.userId, {
         userId: user.userId,
         email: user.email,
@@ -33,20 +19,20 @@ export async function restoreState() {
         balance: { usd_balance: user.balanceCents },
         assets: {} as Record<Asset, number>,
       });
-      // CRITICAL FIX: Populate emailToUserId map for findUser() to work after restart
+      // Populate emailToUserId map for findUser() to work after restart
       emailToUserId.set(user.email, user.userId);
     });
 
     console.log(`[RESTORE] Loaded ${users.length} users into memory`);
 
     // 2. Load active orders from database
-    const activeOrders = await prisma.activeOrder.findMany();
+    const activeOrders: DbActiveOrder[] = await prisma.activeOrder.findMany();
 
     // Load orders into orderStorageMap
-    activeOrders.forEach((order: any) => {
+    activeOrders.forEach((order: DbActiveOrder) => {
       let userOrders = orderStorageMap.get(order.userId);
       if (!userOrders) {
-        userOrders = new Map();
+        userOrders = new Map<string, Order>();
         orderStorageMap.set(order.userId, userOrders);
       }
 
@@ -54,30 +40,32 @@ export async function restoreState() {
         orderId: order.orderId,
         userId: order.userId,
         asset: order.asset as Asset,
-        type: order.type as "buy" | "sell",
+        type: order.type as OrderType,
         margin: order.margin,
-        initialMargin: order.initialMargin,
+        initialMargin: order.initialMargin ?? order.margin,
         addedMargin: order.addedMargin,
-        leverage: order.leverage as 1 | 5 | 10 | 20 | 100,
+        leverage: order.leverage as Leverage,
         openPrice: order.openPrice,
         liquidationPrice: order.liquidationPrice,
-        takeProfit: order.takeProfit || undefined,
-        stopLoss: order.stopLoss || undefined,
+        takeProfit: order.takeProfit ?? undefined,
+        stopLoss: order.stopLoss ?? undefined,
         openTimestamp: order.openedAt.getTime(),
-        trailingStopLoss: order.trailingStopLossEnabled ? {
-          enabled: true,
-          trailingDistance: order.trailingStopLossDistance || 0,
-          highestPrice: order.trailingStopLossHighestPrice || undefined,
-          lowestPrice: order.trailingStopLossLowestPrice || undefined,
-        } : undefined,
+        trailingStopLoss: order.trailingStopLossEnabled
+          ? {
+              enabled: true,
+              trailingDistance: order.trailingStopLossDistance ?? 0,
+              highestPrice: order.trailingStopLossHighestPrice ?? undefined,
+              lowestPrice: order.trailingStopLossLowestPrice ?? undefined,
+            }
+          : undefined,
       });
     });
 
     console.log(
-      `[RESTORE]  State restored: ${users.length} users, ${activeOrders.length} active orders in ${Date.now() - startTime}ms`
+      `[RESTORE] State restored: ${users.length} users, ${activeOrders.length} active orders in ${Date.now() - startTime}ms`
     );
   } catch (error) {
-    console.error("[RESTORE]  Error restoring state:", error);
+    console.error("[RESTORE] Error restoring state:", error);
     throw error;
   }
 }

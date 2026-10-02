@@ -16,7 +16,6 @@ describe("Position Monitor Trigger Rules (shouldClosePosition)", () => {
     takeProfit: 660000000, // $66,000
     stopLoss: 570000000, // $57,000
     openTimestamp: Date.now(),
-    status: "OPEN",
   };
 
   describe("BUY Positions", () => {
