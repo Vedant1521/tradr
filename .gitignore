@@ -98,7 +98,13 @@ dev-journal/
 **/dev-journal/
 notes/
 brain/
+milestones
+.agents
+*skills*
+AGENTS.md
 .system_generated/
+logs.md
+database_data
 
 # Python & ML Caches (Prepared for Phase 2)
 .venv/

@@ -1,0 +1,56 @@
+name: ML CI
+
+on:
+  push:
+    paths:
+      - 'apps/ml/**'
+  pull_request:
+    paths:
+      - 'apps/ml/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: timescale/timescaledb:latest-pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: tradr
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    
+    defaults:
+      run:
+        working-directory: ./apps/ml
+
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          
+      - name: Install uv
+        run: pip install uv
+        
+      - name: Install dependencies
+        run: uv sync
+        
+      - name: Run Ruff
+        run: uv run ruff check .
+        
+      - name: Run mypy
+        run: uv run mypy src/
+        
+      - name: Run tests
+        run: uv run pytest
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/tradr
