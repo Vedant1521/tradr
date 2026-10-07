@@ -58,6 +58,11 @@ def process_and_insert(filepath: str, symbol: str):
         print(f"Failed to read {filepath}: {e}")
         return
 
+    # Handle both millisecond and microsecond timestamps dynamically
+    is_micro = df['timestamp'] > 1e14
+    df['ts_sec'] = df['timestamp'] / 1e6
+    df.loc[~is_micro, 'ts_sec'] = df.loc[~is_micro, 'timestamp'] / 1e3
+    
     # Convert data types
     records = []
     for _, row in df.iterrows():
@@ -65,7 +70,7 @@ def process_and_insert(filepath: str, symbol: str):
             'symbol': f"{symbol}USDT",
             'price': int(float(row['price']) * 10000), # PRICE_SCALE
             'tradeId': int(row['agg_trade_id']),
-            'timestamp': pd.to_datetime(row['timestamp'], unit='ms'),
+            'timestamp': pd.to_datetime(row['ts_sec'], unit='s'),
             'quantity': Decimal(str(row['quantity'])),
             'isBuyerMaker': bool(row['is_buyer_maker'])
         })
